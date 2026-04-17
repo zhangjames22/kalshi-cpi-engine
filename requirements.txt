@@ -1,0 +1,9 @@
+pandas
+numpy
+matplotlib
+statsmodels
+scikit-learn
+requests
+python-dotenv
+pyarrow
+jupyter
