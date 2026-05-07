@@ -24,7 +24,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from core.market import MarketCatalog, MarketId, SettlementLoader
+    from core.market import MarketCatalog, MarketId, Outcome, SettlementLoader
 
 
 # ---------------------------------------------------------------------------
@@ -59,7 +59,9 @@ class SettlementRecord:
     strategy: str
     event_id: str
     market_id: str
-    winning_market_id: str
+    # None when a binary event resolved NO — there is no winning YES market
+    # in that case, by construction.
+    winning_market_id: str | None
     yes_qty: int
     no_qty: int
     payout: float
@@ -163,18 +165,19 @@ class BacktestReport:
     ) -> "BacktestReport":
         # Pair each forecast with its eventual binary outcome (1 if this
         # market won, 0 otherwise). Forecasts on unresolved events are dropped
-        # from scoring but kept in the ledger.
+        # from scoring but kept in the ledger. Cache by event_id; binary-NO
+        # outcomes have winning_market_id=None, which is a legitimate cached
+        # value (no market_id will ever match it -> all forecasts on that
+        # event score 0, which is exactly the YES-side semantic).
         scored: list[tuple[ForecastRecord, int]] = []
-        outcome_cache: dict[str, str] = {}
+        outcome_cache: dict[str, "Outcome | None"] = {}
         for f in forecasts:
-            winner = outcome_cache.get(f.event_id)
-            if winner is None:
-                outcome = settlement_loader.outcome(f.event_id)
-                if outcome is None:
-                    continue
-                winner = outcome.winning_market_id
-                outcome_cache[f.event_id] = winner
-            scored.append((f, 1 if f.market_id == winner else 0))
+            if f.event_id not in outcome_cache:
+                outcome_cache[f.event_id] = settlement_loader.outcome(f.event_id)
+            outcome = outcome_cache[f.event_id]
+            if outcome is None:
+                continue
+            scored.append((f, 1 if f.market_id == outcome.winning_market_id else 0))
 
         ps = [f.p_yes for f, _ in scored]
         ys = [y for _, y in scored]

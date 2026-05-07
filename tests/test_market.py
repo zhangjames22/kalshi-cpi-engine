@@ -11,8 +11,13 @@ import math
 
 import pytest
 
-from core.market import BucketLadder
+from datetime import datetime, timezone
+
+from core.market import BinaryResolution, BucketLadder, Outcome
 from tests._fixtures import make_bucket, make_cpi_like_ladder
+
+
+T = datetime(2024, 1, 1, tzinfo=timezone.utc)
 
 
 # ---------------------------------------------------------------------------
@@ -165,3 +170,66 @@ def test_ladder_is_iterable_and_sized():
     ladder = make_cpi_like_ladder([1.0, 2.0, 3.0])
     assert len(ladder) == 4
     assert [b.market_id for b in ladder] == [b.market_id for b in ladder.buckets]
+
+
+# ---------------------------------------------------------------------------
+# Outcome — binary vs ladder shapes.
+# ---------------------------------------------------------------------------
+
+def test_outcome_ladder_requires_winning_market_id():
+    with pytest.raises(ValueError, match="winning_market_id is required"):
+        Outcome(
+            event_id="E",
+            winning_market_id=None,
+            expiration_value=3.5,
+            resolved_at=T,
+        )
+
+
+def test_outcome_binary_yes_holds_winning_market_id():
+    o = Outcome(
+        event_id="GAME-1",
+        winning_market_id="GAME-1",
+        expiration_value=None,
+        resolved_at=T,
+        binary_resolution=BinaryResolution.YES,
+    )
+    assert o.winning_market_id == "GAME-1"
+    assert o.binary_resolution is BinaryResolution.YES
+
+
+def test_outcome_binary_no_uses_none_winner():
+    o = Outcome(
+        event_id="GAME-1",
+        winning_market_id=None,
+        expiration_value=None,
+        resolved_at=T,
+        binary_resolution=BinaryResolution.NO,
+    )
+    assert o.winning_market_id is None
+    assert o.binary_resolution is BinaryResolution.NO
+
+
+def test_outcome_binary_no_rejects_non_none_winner():
+    """A NO resolution can't carry a winner — that would be ambiguous; the
+    engine's payout logic uses None to mean "no YES winner exists"."""
+    with pytest.raises(ValueError, match="binary_resolution=NO"):
+        Outcome(
+            event_id="GAME-1",
+            winning_market_id="GAME-1#NO",  # the old sentinel
+            expiration_value=None,
+            resolved_at=T,
+            binary_resolution=BinaryResolution.NO,
+        )
+
+
+def test_outcome_binary_yes_rejects_none_winner():
+    """Symmetric: a YES outcome must name the YES market."""
+    with pytest.raises(ValueError, match="winning_market_id is required"):
+        Outcome(
+            event_id="GAME-1",
+            winning_market_id=None,
+            expiration_value=None,
+            resolved_at=T,
+            binary_resolution=BinaryResolution.YES,
+        )

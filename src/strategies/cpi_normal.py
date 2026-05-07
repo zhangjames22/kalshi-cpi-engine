@@ -1,25 +1,30 @@
-"""CPI-Normal strategy — the existing notebook 03 logic packaged as a Strategy.
+"""CPI-Normal strategy — notebook 03's logic packaged as a Strategy.
+
+The strategy owns its CPI-specific feature engineering: derive YoY from a
+raw CPI level series, then fit a Normal(mu, sigma) and emit one
+DistributionForecast per active CPI event. The FeatureView only serves
+raw FRED observations.
 
 Each tick:
-  1. Look up the latest core_cpi_yoy time series available at engine time t.
-  2. Fit Normal(mu, sigma) where:
-        mu    = latest YoY value (in percent units)
+  1. Pull the raw CPI level series (default `core_cpi` from FRED).
+  2. Compute monthly YoY = level[t] / level[t-12] - 1, in percent units.
+  3. Fit Normal(mu, sigma) where:
+        mu    = latest YoY value (in percent)
         sigma = std-dev of monthly YoY changes, annualized via sqrt(12),
-                clamped to a minimum so the bucket probabilities don't
-                degenerate to a delta function.
-  3. For each event in the strategy's universe, emit one DistributionForecast
-     keyed to that event_id. The engine projects the CDF onto the event's
-     bucket ladder.
+                clamped to a minimum so bucket probabilities don't degenerate.
+  4. Emit one DistributionForecast per distinct event in scope; the engine
+     projects the CDF onto each event's bucket ladder.
 
-No orders are emitted in v1. The strategy is purely a research/forecast
-publisher; calibration and Brier are scored from the forecast ledger when
-events resolve.
+No orders are emitted in v1. The strategy is purely a forecast publisher;
+calibration and Brier are scored from the forecast ledger when events resolve.
 """
 
 from __future__ import annotations
 
 import math
 from typing import Iterable
+
+import pandas as pd
 
 from core.forecast import DistributionForecast, normal_cdf
 from core.market import MarketCatalog, MarketId, SeriesId
@@ -33,7 +38,7 @@ class CpiNormalStrategy(Strategy):
     def __init__(
         self,
         series_id: SeriesId,
-        feature_name: str = "core_cpi_yoy",
+        feature_name: str = "core_cpi",
         min_sigma: float = 0.3,
     ) -> None:
         self._series_id = series_id
@@ -65,13 +70,17 @@ class CpiNormalStrategy(Strategy):
         if len(state) == 0:
             return StrategyOutput.empty()
 
-        history = features.get_series(self._feature_name, t)
-        if not history or len(history) < 2:
+        levels = self._get_level_series(features, t)
+        if levels is None or len(levels) < 13:
+            # Need at least 13 monthly observations to compute one YoY.
             return StrategyOutput.empty()
 
-        mu, sigma = self._fit_normal(history)
+        yoy_pct = self._compute_yoy_pct(levels)
+        if len(yoy_pct) < 2:
+            return StrategyOutput.empty()
 
-        # Distinct events present in the universe.
+        mu, sigma = self._fit_normal(yoy_pct)
+
         events = sorted({state.market(mid).event_id for mid in state.market_ids()})
 
         forecasts = tuple(
@@ -81,21 +90,73 @@ class CpiNormalStrategy(Strategy):
         return StrategyOutput(forecasts=forecasts)
 
     # ------------------------------------------------------------------
-    # Internal — fit Normal(mu, sigma) over the provided history.
+    # Feature plumbing.
     # ------------------------------------------------------------------
 
-    def _fit_normal(self, history: list[float]) -> tuple[float, float]:
-        # Convert to percent units if the history looks decimal-scale (e.g.
-        # 0.028 -> 2.8). Uses median magnitude so a few outliers don't flip
-        # the unit detection.
-        sorted_h = sorted(abs(x) for x in history)
-        median = sorted_h[len(sorted_h) // 2]
-        scale = 100.0 if median < 1.0 else 1.0
-        rescaled = [x * scale for x in history]
+    def _get_level_series(self, features: FeatureView, t) -> pd.Series | None:
+        """Try to pull a date-indexed level series; fall back to a list.
 
-        mu = rescaled[-1]
+        FRED's FeatureView exposes a richer `get_indexed_series`; the
+        synthetic stub view only exposes the Protocol's `get_series` (a
+        plain list). Either is enough to compute a monthly YoY: with the
+        list path we assume the values are already monthly observations.
+        """
+        getter = getattr(features, "get_indexed_series", None)
+        if getter is not None:
+            s = getter(self._feature_name, t)
+            if s is None or s.empty:
+                return None
+            return self._collapse_to_monthly(s)
 
-        diffs = [b - a for a, b in zip(rescaled, rescaled[1:])]
+        history = features.get_series(self._feature_name, t)
+        if not history:
+            return None
+        # Assume already monthly, evenly spaced; index doesn't matter for
+        # YoY because we only ever do `.iloc[-1] / .iloc[-13]` style math.
+        return pd.Series(history)
+
+    @staticmethod
+    def _collapse_to_monthly(s: pd.Series) -> pd.Series:
+        """Reduce a daily/sparse series to one observation per month.
+
+        FRED CPI is monthly already, but its index may be daily after
+        forward-fill. Take the first non-null value per month.
+        """
+        s = s.dropna()
+        if s.empty:
+            return s
+        idx = pd.to_datetime(s.index)
+        if getattr(idx, "tz", None) is not None:
+            idx = idx.tz_convert("UTC").tz_localize(None)
+        s = pd.Series(s.values, index=idx)
+        return s.groupby(s.index.to_period("M")).first()
+
+    # ------------------------------------------------------------------
+    # YoY derivation + Normal fit.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _compute_yoy_pct(levels: pd.Series) -> list[float]:
+        """Compute YoY % from a monthly level series.
+
+        yoy_pct[i] = (levels[i] / levels[i-12] - 1) * 100
+        """
+        if len(levels) < 13:
+            return []
+        arr = levels.values.astype(float)
+        out = []
+        for i in range(12, len(arr)):
+            prior = arr[i - 12]
+            if prior == 0 or pd.isna(prior) or pd.isna(arr[i]):
+                continue
+            out.append(float((arr[i] / prior - 1.0) * 100.0))
+        return out
+
+    def _fit_normal(self, yoy_pct: list[float]) -> tuple[float, float]:
+        """Fit Normal(mu, sigma) to a YoY-in-percent series."""
+        mu = yoy_pct[-1]
+
+        diffs = [b - a for a, b in zip(yoy_pct, yoy_pct[1:])]
         if not diffs:
             return mu, self._min_sigma
         mean_d = sum(diffs) / len(diffs)

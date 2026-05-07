@@ -254,15 +254,20 @@ def build_cpi_scenario(
         t += snapshot_interval
     snapshots.sort(key=lambda s: s.ts)
 
-    # ---- features: synthetic core_cpi_yoy series anchored at feature_mean ----
+    # ---- features: synthetic core_cpi level series whose YoY ~ feature_mean ----
+    #
+    # The strategy reads `core_cpi` (raw level) and derives YoY internally,
+    # so we simulate a CPI level path where (level[t] / level[t-12] - 1) * 100
+    # has mean ≈ feature_mean with a bit of noise.
     feature_series: list[tuple[datetime, float]] = []
+    monthly_growth = feature_mean / 100.0 / 12.0  # geometric monthly growth
     monthly = open_time - timedelta(days=feature_history_len * 30)
-    val = feature_mean
+    level = 100.0
     for _ in range(feature_history_len):
-        val = val + rng.gauss(0, feature_sigma * 0.05)
-        feature_series.append((monthly, val))
+        level = level * (1.0 + monthly_growth + rng.gauss(0, feature_sigma * 0.0005))
+        feature_series.append((monthly, level))
         monthly += timedelta(days=30)
-    feature_view = InMemoryFeatureView(series={"core_cpi_yoy": feature_series})
+    feature_view = InMemoryFeatureView(series={"core_cpi": feature_series})
 
     # ---- settlement: realized_value lands in some bucket ----
     winning_market_id = ladder.winning_market(realized_value)

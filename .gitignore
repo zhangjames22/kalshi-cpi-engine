@@ -13,6 +13,9 @@ __pycache__/
 /data/
 *.parquet
 *.csv
+# ...except the small committed test fixtures that the benchmark suite
+# loads. They make the repo's test runs reproducible without network I/O.
+!tests/fixtures/**/*.parquet
 
 # Claude Code worktrees and session data
 .claude/

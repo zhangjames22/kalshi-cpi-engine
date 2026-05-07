@@ -14,6 +14,7 @@ from .forecast import (
 )
 from .market import (
     BinaryMarket,
+    BinaryResolution,
     BucketLadder,
     BucketMarket,
     Event,
@@ -38,6 +39,7 @@ from .strategy import FeatureView, Strategy, StrategyOutput
 __all__ = [
     # market
     "BinaryMarket",
+    "BinaryResolution",
     "BucketLadder",
     "BucketMarket",
     "Event",

@@ -28,6 +28,7 @@ interface that hides which source supplied the outcome.
 
 from __future__ import annotations
 
+import enum
 import math
 from dataclasses import dataclass
 from datetime import datetime
@@ -195,23 +196,53 @@ class BucketLadder:
 # Outcomes.
 # ---------------------------------------------------------------------------
 
+class BinaryResolution(enum.Enum):
+    """How a BinaryMarket event resolved. Only meaningful for binary events;
+    ladder events leave `Outcome.binary_resolution` set to None."""
+    YES = "yes"
+    NO = "no"
+
+
 @dataclass(frozen=True, kw_only=True)
 class Outcome:
     """The resolved truth for an event.
 
-    For ladder events, `expiration_value` is the underlying numeric value
-    (e.g. realized CPI YoY = 3.27) and `winning_market_id` is the bucket
-    that contains it. For binary events, `expiration_value` is None and
-    `winning_market_id` is the market itself iff it resolved YES — for
-    a NO-resolving binary, callers should encode that as
-    `winning_market_id=""` (empty sentinel) or simply not record an Outcome
-    if the strategy isn't holding the position. We model the YES side
-    canonically; the engine derives NO P&L by complementarity.
+    Three valid shapes:
+
+    1. **Ladder event** — `binary_resolution=None`, `winning_market_id` is
+       the bucket whose [floor, cap) contains the realized
+       `expiration_value`.
+    2. **Binary YES** — `binary_resolution=BinaryResolution.YES`,
+       `winning_market_id` is the binary market itself. YES contracts pay $1.
+    3. **Binary NO**  — `binary_resolution=BinaryResolution.NO`,
+       `winning_market_id=None`. NO contracts pay $1; YES contracts pay $0.
+
+    The engine's payout logic compares `market_id == winning_market_id` to
+    decide whether YES contracts cash; the None case for a binary NO never
+    matches any market_id, which gives NO contracts the payout by
+    complementarity.
     """
     event_id: EventId
-    winning_market_id: MarketId
+    winning_market_id: MarketId | None
     expiration_value: float | None
     resolved_at: datetime
+    binary_resolution: BinaryResolution | None = None
+
+    def __post_init__(self) -> None:
+        if self.binary_resolution is BinaryResolution.NO:
+            if self.winning_market_id is not None:
+                raise ValueError(
+                    f"Outcome for {self.event_id}: binary_resolution=NO "
+                    f"requires winning_market_id=None, got "
+                    f"{self.winning_market_id!r}"
+                )
+        else:
+            # Ladder outcome OR binary YES — both require a non-None winner.
+            if self.winning_market_id is None:
+                raise ValueError(
+                    f"Outcome for {self.event_id}: winning_market_id is "
+                    f"required unless binary_resolution=NO"
+                )
 
 
 # ---------------------------------------------------------------------------

@@ -181,3 +181,61 @@ def test_position_cost_basis_sums_both_sides():
         no_qty=5,  no_avg_price=0.55,
     )
     assert pos.cost_basis == pytest.approx(10 * 0.4 + 5 * 0.55)
+
+
+# ---------------------------------------------------------------------------
+# PortfolioView immutability
+# ---------------------------------------------------------------------------
+
+def test_portfolio_view_blocks_attribute_assignment():
+    """Strategies must not be able to swap out the underlying Portfolio
+    or rebind the strategy scope by assignment."""
+    p = Portfolio(cash=100.0)
+    v = p.view_for("strat-A")
+
+    with pytest.raises(AttributeError):
+        v.cash = 999.0  # type: ignore[misc]
+    with pytest.raises(AttributeError):
+        v._portfolio = Portfolio(cash=0.0)  # type: ignore[misc]
+    with pytest.raises(AttributeError):
+        v._strategy = "strat-B"  # type: ignore[misc]
+    # __slots__ also blocks creating brand-new attributes.
+    with pytest.raises(AttributeError):
+        v.injected = "anything"  # type: ignore[misc]
+
+
+def test_portfolio_view_blocks_attribute_deletion():
+    p = Portfolio(cash=100.0)
+    v = p.view_for("strat-A")
+    with pytest.raises(AttributeError):
+        del v.cash  # type: ignore[misc]
+
+
+def test_portfolio_view_has_no_dict():
+    """__slots__ is the mechanism. Confirm no per-instance __dict__ exists,
+    which prevents Python's default attribute storage from being used."""
+    p = Portfolio(cash=100.0)
+    v = p.view_for("strat-A")
+    assert not hasattr(v, "__dict__")
+
+
+def test_portfolio_view_strategy_property_is_readable():
+    """The scoped strategy name is exposed read-only for diagnostics."""
+    p = Portfolio(cash=100.0)
+    v = p.view_for("strat-A")
+    assert v.strategy == "strat-A"
+    with pytest.raises(AttributeError):
+        v.strategy = "strat-B"  # type: ignore[misc]
+
+
+def test_portfolio_view_reflects_portfolio_mutations():
+    """Read-only here means 'the view itself is read-only'; the underlying
+    Portfolio is still mutable by the engine. Cash/positions read through
+    the view should reflect those engine-side updates."""
+    p = Portfolio(cash=100.0)
+    v = p.view_for("strat-A")
+    assert v.cash == 100.0
+    p.cash = 250.0
+    assert v.cash == 250.0
+    p.set_position("strat-A", Position(market_id="M1", yes_qty=7))
+    assert v.position("M1").yes_qty == 7

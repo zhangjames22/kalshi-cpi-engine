@@ -192,30 +192,63 @@ class Portfolio:
 
     def view_for(self, strategy: str) -> "PortfolioView":
         """Return the read-only view a Strategy sees on each tick."""
-        return PortfolioView(_portfolio=self, _strategy=strategy)
+        return PortfolioView(self, strategy)
 
 
-@dataclass(frozen=True)
 class PortfolioView:
     """Read-only window into the shared Portfolio, scoped to one strategy.
 
     A strategy can only see its own positions — it cannot inspect what
     other strategies in a multi-strategy run are holding. Cash is reported
     as the shared pool; strategies are expected to size responsibly.
+
+    Hardened against accidental mutation: stored references are kept on
+    `__slots__` (no `__dict__`), are not exposed as attributes, and
+    `__setattr__` is locked after construction. A strategy that tries to
+    reassign `view._portfolio = something_else` gets AttributeError.
     """
-    _portfolio: Portfolio
-    _strategy: str
+
+    __slots__ = ("__portfolio", "__strategy_name")
+
+    def __init__(self, portfolio: Portfolio, strategy_name: str) -> None:
+        # Private name-mangled slots so strategies can't reach in via
+        # `view._PortfolioView__portfolio` without obvious ill intent. Set
+        # via object.__setattr__ because our own __setattr__ raises.
+        object.__setattr__(self, "_PortfolioView__portfolio", portfolio)
+        object.__setattr__(self, "_PortfolioView__strategy_name", strategy_name)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        raise AttributeError(
+            f"PortfolioView is read-only; cannot set attribute {name!r}"
+        )
+
+    def __delattr__(self, name: str) -> None:
+        raise AttributeError(
+            f"PortfolioView is read-only; cannot delete attribute {name!r}"
+        )
 
     @property
     def cash(self) -> float:
-        return self._portfolio.cash
+        return self.__portfolio.cash
+
+    @property
+    def strategy(self) -> str:
+        """The strategy name this view is scoped to. Useful for debug
+        output and assertions; the engine uses it during reconciliation."""
+        return self.__strategy_name
 
     def position(self, market_id: MarketId) -> Position:
-        return self._portfolio.position(self._strategy, market_id)
+        return self.__portfolio.position(self.__strategy_name, market_id)
 
     def positions(self) -> list[Position]:
         return [
             p
-            for (s, _), p in self._portfolio.positions.items()
-            if s == self._strategy
+            for (s, _), p in self.__portfolio.positions.items()
+            if s == self.__strategy_name
         ]
+
+    def __repr__(self) -> str:
+        return (
+            f"PortfolioView(strategy={self.__strategy_name!r}, "
+            f"cash={self.__portfolio.cash})"
+        )
