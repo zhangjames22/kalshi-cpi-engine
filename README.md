@@ -25,7 +25,9 @@ scoring or settlement plumbing fails the suite.
 ## Two reference strategies
 
 Both strategies emit forecasts only — no orders. The framework still scores
-them via Brier, log-loss, and a 10-bin calibration curve.
+them via Brier, log-loss, and a 10-bin calibration curve. Copy-paste
+snippets that show the engine wiring for both are in
+[EXAMPLES.md](EXAMPLES.md).
 
 ### CpiNormalStrategy — macro, distribution forecast
 
