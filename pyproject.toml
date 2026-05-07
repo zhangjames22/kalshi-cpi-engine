@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kalshi-cpi-engine"
+version = "0.1.0"
+description = "Strategy management and observability platform for prediction-market quants."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "James Zhang" }]
+dependencies = [
+    "pandas",
+    "numpy",
+    "scipy",
+    "matplotlib",
+    "statsmodels",
+    "scikit-learn",
+    "requests",
+    "python-dotenv",
+    "pyarrow",
+    "jupyter",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "ruff",
+]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
