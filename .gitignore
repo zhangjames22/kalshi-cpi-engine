@@ -1,12 +1,21 @@
-.venv/
-.env
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
 .ipynb_checkpoints/
-data/*.parquet
-data/*.csv
-.venv/
-data/
+
+# Environment
 .env
+.venv/
+
+# Data files (large, regenerable)
+data/
+*.parquet
+*.csv
 
 # Claude Code worktrees and session data
 .claude/
+
+# OS
 .DS_Store
