@@ -6,3 +6,7 @@ data/*.csv
 .venv/
 data/
 .env
+
+# Claude Code worktrees and session data
+.claude/
+.DS_Store
